@@ -296,7 +296,14 @@ public class KisProxyServer {
                     throw new Exception("이미지 base64 데이터가 없습니다.");
                 }
 
-                // PNG로 고정 (캔버스 캡처 + 대부분의 스크린샷)
+              // JSON 안전 이스케이프 (줄바꿈·따옴표 깨짐 방지)
+                String escapedPrompt = AZIZ_PROMPT
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n")
+                        .replace("\r", "\\r")
+                        .replace("\t", "\\t");
+
                 String reqJson = "{"
                         + "\"model\":\"claude-sonnet-5\","
                         + "\"max_tokens\":8192,"
@@ -305,11 +312,11 @@ public class KisProxyServer {
                         + "\"content\":["
                         + "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\""
                         + base64Image + "\"}},"
-                        + "{\"type\":\"text\",\"text\":\"" + AZIZ_PROMPT + "\"}"
+                        + "{\"type\":\"text\",\"text\":\"" + escapedPrompt + "\"}"
                         + "]"
                         + "}]"
                         + "}";
-
+                
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create("https://api.anthropic.com/v1/messages"))
                         .header("Content-Type", "application/json")
