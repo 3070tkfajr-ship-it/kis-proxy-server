@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -16,6 +17,8 @@ public class KisProxyServer {
     private static final String APP_SECRET = System.getenv("KIS_APP_SECRET");
     private static final String GEMINI_KEY = System.getenv("GEMINI_API_KEY");
     private static final String CLAUDE_KEY = System.getenv("CLAUDE_API_KEY");
+    // 미국 주식 1분봉용 (Alpha Vantage, alphavantage.co에서 무료 발급, 무료 키는 하루 25회 제한)
+    private static final String ALPHA_VANTAGE_KEY = System.getenv("ALPHA_VANTAGE_KEY");
 
     private static final String CORS_ORIGIN = System.getenv().getOrDefault("CORS_ORIGIN", "*");
     private static final int PORT = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
@@ -75,6 +78,7 @@ public class KisProxyServer {
         server.createContext("/data", new DataHandler());
         server.createContext("/analyze", new AnalyzeHandler());
         server.createContext("/analyze-claude", new ClaudeAnalyzeHandler());
+        server.createContext("/us-data", new UsDataHandler());
         server.setExecutor(null);
         server.start();
         System.out.println("🚀 자바 실전 중계 서버가 " + PORT + " 포트에서 실행 중! (Gemini + Claude Sonnet 5 탑재 완료)");
@@ -342,6 +346,66 @@ public class KisProxyServer {
                 e.printStackTrace();
                 String error = "{\"error\": \"Claude AI 분석 실패: "
                         + e.getMessage().replace("\"", "'") + "\"}";
+                byte[] errorBytes = error.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
+                exchange.sendResponseHeaders(500, errorBytes.length);
+                OutputStream os = exchange.getResponseBody();
+                os.write(errorBytes);
+                os.close();
+            }
+        }
+    }
+
+    // 미국 주식 1분봉 프록시 (Alpha Vantage, 무료 키는 하루 25회 제한)
+    static class UsDataHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", CORS_ORIGIN);
+            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, OPTIONS");
+                exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+            try {
+                if (ALPHA_VANTAGE_KEY == null || ALPHA_VANTAGE_KEY.isEmpty()) {
+                    String error = "{\"error\": \"ALPHA_VANTAGE_KEY 환경변수가 설정되지 않았습니다\"}";
+                    byte[] b = error.getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
+                    exchange.sendResponseHeaders(500, b.length);
+                    OutputStream os = exchange.getResponseBody(); os.write(b); os.close();
+                    return;
+                }
+
+                String query = exchange.getRequestURI().getQuery();
+                String symbol = "AAPL";
+                if (query != null && query.contains("symbol=")) {
+                    symbol = query.split("symbol=")[1].split("&")[0];
+                }
+                symbol = URLEncoder.encode(symbol, StandardCharsets.UTF_8);
+
+                String url = "https://www.alphavantage.co/query"
+                        + "?function=TIME_SERIES_INTRADAY"
+                        + "&symbol=" + symbol
+                        + "&interval=1min"
+                        + "&outputsize=full"
+                        + "&apikey=" + ALPHA_VANTAGE_KEY;
+
+                HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+                HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+
+                byte[] responseBytes = res.body().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
+                exchange.sendResponseHeaders(200, responseBytes.length);
+                OutputStream os = exchange.getResponseBody();
+                os.write(responseBytes);
+                os.close();
+
+                System.out.println("🇺🇸 미국 주식 1분봉 전송 완료! (심볼: " + symbol + ")");
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                String error = "{\"error\": \"미국 주식 데이터 연동 실패\"}";
                 byte[] errorBytes = error.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
                 exchange.sendResponseHeaders(500, errorBytes.length);
