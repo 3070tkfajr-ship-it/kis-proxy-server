@@ -17,8 +17,8 @@ public class KisProxyServer {
     private static final String APP_SECRET = System.getenv("KIS_APP_SECRET");
     private static final String GEMINI_KEY = System.getenv("GEMINI_API_KEY");
     private static final String CLAUDE_KEY = System.getenv("CLAUDE_API_KEY");
-    // 미국 주식 1분봉용 (Alpha Vantage, alphavantage.co에서 무료 발급, 무료 키는 하루 25회 제한)
-    private static final String ALPHA_VANTAGE_KEY = System.getenv("ALPHA_VANTAGE_KEY");
+    // 미국 주식 1분봉용 (Twelve Data, twelvedata.com에서 무료 발급. 무료 플랜: 하루 800회, 분당 8회, outputsize 최대 5000까지 지정 가능)
+    private static final String TWELVE_DATA_KEY = System.getenv("TWELVE_DATA_KEY");
 
     private static final String CORS_ORIGIN = System.getenv().getOrDefault("CORS_ORIGIN", "*");
     private static final int PORT = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
@@ -356,7 +356,7 @@ public class KisProxyServer {
         }
     }
 
-    // 미국 주식 1분봉 프록시 (Alpha Vantage, 무료 키는 하루 25회 제한)
+    // 미국 주식 1분봉 프록시 (Twelve Data, 무료 플랜: 하루 800회, 분당 8회)
     static class UsDataHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -368,8 +368,8 @@ public class KisProxyServer {
                 return;
             }
             try {
-                if (ALPHA_VANTAGE_KEY == null || ALPHA_VANTAGE_KEY.isEmpty()) {
-                    String error = "{\"error\": \"ALPHA_VANTAGE_KEY 환경변수가 설정되지 않았습니다\"}";
+                if (TWELVE_DATA_KEY == null || TWELVE_DATA_KEY.isEmpty()) {
+                    String error = "{\"error\": \"TWELVE_DATA_KEY 환경변수가 설정되지 않았습니다\"}";
                     byte[] b = error.getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
                     exchange.sendResponseHeaders(500, b.length);
@@ -384,12 +384,11 @@ public class KisProxyServer {
                 }
                 symbol = URLEncoder.encode(symbol, StandardCharsets.UTF_8);
 
-                String url = "https://www.alphavantage.co/query"
-                        + "?function=TIME_SERIES_INTRADAY"
-                        + "&symbol=" + symbol
+                String url = "https://api.twelvedata.com/time_series"
+                        + "?symbol=" + symbol
                         + "&interval=1min"
-                        + "&outputsize=full"
-                        + "&apikey=" + ALPHA_VANTAGE_KEY;
+                        + "&outputsize=500"
+                        + "&apikey=" + TWELVE_DATA_KEY;
 
                 HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
                 HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
