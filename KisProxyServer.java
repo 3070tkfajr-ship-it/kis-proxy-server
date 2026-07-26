@@ -12,21 +12,16 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 
 public class KisProxyServer {
-    // 🚨 환경변수(Render 금고)에서 키를 안전하게 읽어옴
     private static final String APP_KEY = System.getenv("KIS_APP_KEY");
     private static final String APP_SECRET = System.getenv("KIS_APP_SECRET");
     private static final String GEMINI_KEY = System.getenv("GEMINI_API_KEY");
-    private static final String CLAUDE_KEY = System.getenv("CLAUDE_API_KEY");  // ← 추가
+    private static final String CLAUDE_KEY = System.getenv("CLAUDE_API_KEY");
 
-    // CORS 및 포트 설정
     private static final String CORS_ORIGIN = System.getenv().getOrDefault("CORS_ORIGIN", "*");
     private static final int PORT = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
-
-    // 🚨 오타 수정 완료: 실전투자용 올바른 도메인 및 포트
     private static final String DOMAIN = "https://openapi.koreainvestment.com:9443";
     private static String accessToken = "";
 
-    // 공통 프롬프트 (아지즈 기법)
     private static final String AZIZ_PROMPT =
             "너는 앤드루 아지즈(Andrew Aziz) 데이트레이딩 기법의 마스터야. 첨부된 1분봉 차트 이미지를 보고 오직 'VWAP', 'EMA(5, 9, 20, 200)', 'Stochastic RSI(14,14,3,3)' 3가지 지표만을 딥(deep)하게 분석해서 타점을 평가해. 다른 지표나 펀더멘털 분석 등은 절대 언급하지 마. 후행성 지표이고 완벽한 타점은 없다.\\n" +
             "총점은 96점 만점 기준으로 아래 채점표에 따라 엄격하게 계산해. 롱 가능 점수와 숏 가능 점수를 각각 따로 계산해서 제시하고, 둘 다 의미 있는 점수가 아니면 '관망'으로 제시해.\\n\\n" +
@@ -47,20 +42,13 @@ public class KisProxyServer {
             System.out.println("🚨 KIS_APP_KEY / KIS_APP_SECRET 환경변수가 설정되지 않았습니다.");
         }
         if (CLAUDE_KEY == null || CLAUDE_KEY.isEmpty()) {
-            System.out.println("⚠️ CLAUDE_API_KEY 환경변수가 설정되지 않았습니다. /analyze-claude 사용 불가.");
+            System.out.println("⚠️ CLAUDE_API_KEY 환경변수가 설정되지 않았습니다.");
         }
 
         HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
-
-        // 1. 차트 데이터 중계 핸들러
         server.createContext("/data", new DataHandler());
-
-        // 2. 🤖 Gemini AI 스크린샷 분석 중계 핸들러
         server.createContext("/analyze", new AnalyzeHandler());
-
-        // 3. 🤖 Claude Sonnet 5 분석 중계 핸들러 (신규)
         server.createContext("/analyze-claude", new ClaudeAnalyzeHandler());
-
         server.setExecutor(null);
         server.start();
         System.out.println("🚀 자바 실전 중계 서버가 " + PORT + " 포트에서 실행 중! (Gemini + Claude Sonnet 5 탑재 완료)");
@@ -81,36 +69,39 @@ public class KisProxyServer {
                     throw new Exception("KIS API Key가 서버에 설정되지 않았습니다.");
                 }
                 if (accessToken.isEmpty()) {
-                    String tokenReqBody = String.format("{\"grant_type\":\"client_credentials\", \"appkey\":\"%s\", \"appsecret\":\"%s\"}", APP_KEY, APP_SECRET);
+                    String tokenReqBody = String.format(
+                            "{\"grant_type\":\"client_credentials\", \"appkey\":\"%s\", \"appsecret\":\"%s\"}",
+                            APP_KEY, APP_SECRET);
                     HttpRequest tokenReq = HttpRequest.newBuilder()
                             .uri(URI.create(DOMAIN + "/oauth2/tokenP"))
                             .header("Content-Type", "application/json")
                             .POST(HttpRequest.BodyPublishers.ofString(tokenReqBody))
                             .build();
-                    HttpResponse<String> tokenRes = HttpClient.newHttpClient().send(tokenReq, HttpResponse.BodyHandlers.ofString());
+                    HttpResponse<String> tokenRes = HttpClient.newHttpClient()
+                            .send(tokenReq, HttpResponse.BodyHandlers.ofString());
                     String body = tokenRes.body();
                     int start = body.indexOf("\"access_token\":\"") + 16;
                     int end = body.indexOf("\"", start);
                     accessToken = body.substring(start, end);
                     System.out.println("🔑 한투 보안 토큰 갱신 완료!");
                 }
+
                 String query = exchange.getRequestURI().getQuery();
                 String code = "114800";
                 String tf = "1m";
-
                 if (query != null) {
                     for (String param : query.split("&")) {
                         if (param.startsWith("code=")) code = param.split("=")[1];
                         if (param.startsWith("tf=")) tf = param.split("=")[1];
                     }
                 }
+
                 String responseBodyJson = "";
-                // 일봉(D)인 경우 기존대로 100일치 조회
                 if ("D".equalsIgnoreCase(tf)) {
-                    java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd");
+                    java.time.format.DateTimeFormatter dtf =
+                            java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd");
                     String today = java.time.LocalDate.now().format(dtf);
                     String past = java.time.LocalDate.now().minusDays(100).format(dtf);
-
                     String url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
                             + "?FID_COND_MRKT_DIV_CODE=J"
                             + "&FID_INPUT_ISCD=" + code
@@ -127,14 +118,12 @@ public class KisProxyServer {
                             .header("tr_id", "FHKST03010100")
                             .GET()
                             .build();
-                    HttpResponse<String> dataRes = HttpClient.newHttpClient().send(dataReq, HttpResponse.BodyHandlers.ofString());
+                    HttpResponse<String> dataRes = HttpClient.newHttpClient()
+                            .send(dataReq, HttpResponse.BodyHandlers.ofString());
                     responseBodyJson = dataRes.body();
                 } else {
-                    // 🚀 1분봉 500개 긁어오기 (30개씩 연속 조회 루프)
                     java.util.List<String> combinedOutput2 = new java.util.ArrayList<>();
-                    String targetHour = "153000"; // 시작 기준 시간 (장마감 혹은 현재 시간)
-
-                    // 500개를 채우려면 30개씩 약 17번 호출 필요
+                    String targetHour = "153000";
                     for (int i = 0; i < 17; i++) {
                         String url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
                                 + "?FID_ETC_CLS_CODE="
@@ -151,17 +140,15 @@ public class KisProxyServer {
                                 .header("tr_id", "FHKST03010200")
                                 .GET()
                                 .build();
-                        HttpResponse<String> dataRes = HttpClient.newHttpClient().send(dataReq, HttpResponse.BodyHandlers.ofString());
+                        HttpResponse<String> dataRes = HttpClient.newHttpClient()
+                                .send(dataReq, HttpResponse.BodyHandlers.ofString());
                         String resBody = dataRes.body();
-                        // output2 배열 추출 및 병합
                         int out2Idx = resBody.indexOf("\"output2\":[");
                         if (out2Idx == -1) break;
-
                         int bracketEnd = resBody.indexOf("]", out2Idx);
                         if (bracketEnd == -1) break;
                         String itemsStr = resBody.substring(out2Idx + 11, bracketEnd);
                         if (itemsStr.trim().isEmpty()) break;
-                        // 개별 캔들 아이템들 분리
                         String[] items = itemsStr.split("\\},\\{");
                         if (items.length == 0) break;
                         String oldestTime = "";
@@ -169,9 +156,7 @@ public class KisProxyServer {
                             String item = items[j];
                             if (!item.startsWith("{")) item = "{" + item;
                             if (!item.endsWith("}")) item = item + "}";
-
                             combinedOutput2.add(item);
-                            // 가장 오래된 시간(마지막 아이템의 stck_cntg_hour) 추출
                             if (j == items.length - 1) {
                                 int timeIdx = item.indexOf("\"stck_cntg_hour\":\"");
                                 if (timeIdx != -1) {
@@ -181,34 +166,35 @@ public class KisProxyServer {
                                 }
                             }
                         }
-                        // 더 이상 과거 데이터가 없거나 중단되면 탈출
                         if (oldestTime.isEmpty() || oldestTime.compareTo(targetHour) >= 0) break;
                         targetHour = oldestTime;
-                        // 한투 API 제한 회피용 살짝 대기 (0.05초)
                         Thread.sleep(50);
                     }
-                    // 500개 모은 데이터를 하나의 JSON 구조로 조립
-                    responseBodyJson = "{\"output1\":{},\"output2\":[" + String.join(",", combinedOutput2) + "],\"rt_cd\":\"000000\",\"msg1\":\"정상처리 되었습니다.\"}";
+                    responseBodyJson = "{\"output1\":{},\"output2\":["
+                            + String.join(",", combinedOutput2)
+                            + "],\"rt_cd\":\"000000\",\"msg1\":\"정상처리 되었습니다.\"}";
                 }
-                byte[] responseBytes = responseBodyJson.getBytes("UTF-8");
+
+                byte[] responseBytes = responseBodyJson.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
                 exchange.sendResponseHeaders(200, responseBytes.length);
                 OutputStream os = exchange.getResponseBody();
                 os.write(responseBytes);
                 os.close();
-                System.out.println("📊 대용량 차트 데이터 전송 완료! (종목: " + code + ", 방식: " + tf + ")");
+                System.out.println("📊 차트 데이터 전송 완료! (종목: " + code + ", 방식: " + tf + ")");
             } catch (Exception e) {
                 e.printStackTrace();
                 String error = "{\"error\": \"데이터 연동 실패\"}";
-                exchange.sendResponseHeaders(500, error.getBytes().length);
+                byte[] errorBytes = error.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
+                exchange.sendResponseHeaders(500, errorBytes.length);
                 OutputStream os = exchange.getResponseBody();
-                os.write(error.getBytes());
+                os.write(errorBytes);
                 os.close();
             }
         }
     }
 
-    // 🤖 구글 Gemini AI 요청 처리 (기존)
     static class AnalyzeHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -222,7 +208,6 @@ public class KisProxyServer {
             try {
                 InputStream is = exchange.getRequestBody();
                 String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-
                 String base64Image = "";
                 int imgStart = body.indexOf("\"image\":\"") + 9;
                 if (imgStart > 8) {
@@ -233,33 +218,36 @@ public class KisProxyServer {
                     throw new Exception("Gemini API Key가 서버에 설정되지 않았습니다.");
                 }
                 String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=" + GEMINI_KEY;
-
-                String reqJson = "{\"contents\":[{\"parts\":[{\"text\":\"" + AZIZ_PROMPT + "\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"" + base64Image + "\"}}]}]}";
+                String reqJson = "{\"contents\":[{\"parts\":[{\"text\":\"" + AZIZ_PROMPT
+                        + "\"},{\"inline_data\":{\"mime_type\":\"image/png\",\"data\":\""
+                        + base64Image + "\"}}]}]}";
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(geminiUrl))
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(reqJson))
                         .build();
-                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = HttpClient.newHttpClient()
+                        .send(request, HttpResponse.BodyHandlers.ofString());
                 byte[] responseBytes = response.body().getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
                 exchange.sendResponseHeaders(200, responseBytes.length);
                 OutputStream os = exchange.getResponseBody();
                 os.write(responseBytes);
                 os.close();
-                System.out.println("🤖 Gemini AI 차트 분석 완료 및 브라우저 전송 성공!");
+                System.out.println("🤖 Gemini 차트 분석 완료!");
             } catch (Exception e) {
                 e.printStackTrace();
                 String error = "{\"error\": \"AI 분석 실패\"}";
-                exchange.sendResponseHeaders(500, error.getBytes().length);
+                byte[] errorBytes = error.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
+                exchange.sendResponseHeaders(500, errorBytes.length);
                 OutputStream os = exchange.getResponseBody();
-                os.write(error.getBytes());
+                os.write(errorBytes);
                 os.close();
             }
         }
     }
 
-    // 🤖 Claude Sonnet 5 분석 핸들러 (신규)
     static class ClaudeAnalyzeHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -273,14 +261,12 @@ public class KisProxyServer {
             try {
                 InputStream is = exchange.getRequestBody();
                 String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-
                 String base64Image = "";
                 int imgStart = body.indexOf("\"image\":\"") + 9;
                 if (imgStart > 8) {
                     int imgEnd = body.indexOf("\"", imgStart);
                     base64Image = body.substring(imgStart, imgEnd);
                 }
-
                 if (CLAUDE_KEY == null || CLAUDE_KEY.isEmpty()) {
                     throw new Exception("Claude API Key(CLAUDE_API_KEY)가 서버에 설정되지 않았습니다.");
                 }
@@ -288,14 +274,15 @@ public class KisProxyServer {
                     throw new Exception("이미지 base64 데이터가 없습니다.");
                 }
 
-                // Anthropic Messages API 요청 본문 구성
+                // PNG로 고정 (캔버스 캡처 + 대부분의 스크린샷)
                 String reqJson = "{"
                         + "\"model\":\"claude-sonnet-5\","
-                        + "\"max_tokens\":2048,"
+                        + "\"max_tokens\":8192,"
                         + "\"messages\":[{"
                         + "\"role\":\"user\","
                         + "\"content\":["
-                        + "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"" + base64Image + "\"}},"
+                        + "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\""
+                        + base64Image + "\"}},"
                         + "{\"type\":\"text\",\"text\":\"" + AZIZ_PROMPT + "\"}"
                         + "]"
                         + "}]"
@@ -309,7 +296,8 @@ public class KisProxyServer {
                         .POST(HttpRequest.BodyPublishers.ofString(reqJson))
                         .build();
 
-                HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = HttpClient.newHttpClient()
+                        .send(request, HttpResponse.BodyHandlers.ofString());
                 byte[] responseBytes = response.body().getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
                 exchange.sendResponseHeaders(response.statusCode(), responseBytes.length);
@@ -319,7 +307,8 @@ public class KisProxyServer {
                 System.out.println("🤖 Claude Sonnet 5 차트 분석 완료! (status: " + response.statusCode() + ")");
             } catch (Exception e) {
                 e.printStackTrace();
-                String error = "{\"error\": \"Claude AI 분석 실패: " + e.getMessage().replace("\"", "'") + "\"}";
+                String error = "{\"error\": \"Claude AI 분석 실패: "
+                        + e.getMessage().replace("\"", "'") + "\"}";
                 byte[] errorBytes = error.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
                 exchange.sendResponseHeaders(500, errorBytes.length);
