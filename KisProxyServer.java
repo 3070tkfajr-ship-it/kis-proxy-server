@@ -149,7 +149,12 @@ public class KisProxyServer {
                 }
 
                 String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY;
-                String prompt = "너는 앤드루 아지즈 매매법(데이트레이딩) 전문가야. 업로드된 1분봉 차트를 보고 VWAP, EMA(5/9/20/200), 스토캐스틱 RSI를 분석해 줘. 1. 지표 상태 2. 모멘텀 3. 타점 점수(100점 만점) 및 한 줄 평 형식으로 짧고 명확하게 작성해 줘. HTML 태그(<b> 등)를 적절히 섞어서 가독성 좋게 꾸며줘.";
+               String prompt = "너는 앤드루 아지즈 매매법(데이트레이딩) 전문가야. 첨부된 주식 1분봉 차트 이미지의 텍스트와 지표를 정확히 읽어내 분석해 줘.\n" +
+                "1. 종목명, 현재가, 주가 흐름 (VWAP과 주가의 위치 관계)\n" +
+                "2. 이동평균선(5, 20, 200)의 배열 상태 및 크로스 여부\n" +
+                "3. 하단 스토캐스틱 RSI(%K, %D)의 위치 (과매수/과매도/중립)\n" +
+                "4. 위 내용을 바탕으로 한 앤드루 아지즈 관점의 타점 분석 및 100점 만점 점수\n" +
+                "반드시 가독성 좋은 HTML 태그(<b> 등)를 사용해서 명확하게 답변해 줘.";
                 
                 String reqJson = "{\"contents\":[{\"parts\":[{\"text\":\"" + prompt + "\"},{\"inline_data\":{\"mime_type\":\"image/jpeg\",\"data\":\"" + base64Image + "\"}}]}]}";
 
