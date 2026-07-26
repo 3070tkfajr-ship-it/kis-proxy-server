@@ -78,7 +78,7 @@ static class DataHandler implements HttpHandler {
 
                 String query = exchange.getRequestURI().getQuery();
                 String code = "114800";
-                String tf = "1m"; // 기본값은 1분봉
+                String tf = "1m";
                 
                 if (query != null) {
                     for (String param : query.split("&")) {
@@ -87,54 +87,115 @@ static class DataHandler implements HttpHandler {
                     }
                 }
 
-                String url;
-                String trId;
+                String responseBodyJson = "";
 
-                // tf=D (일봉) 요청 시 API 주소 및 파라미터 완전 변경
+                // 일봉(D)인 경우 기존대로 100일치 조회
                 if ("D".equalsIgnoreCase(tf)) {
                     java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd");
                     String today = java.time.LocalDate.now().format(dtf);
-                    String past = java.time.LocalDate.now().minusDays(100).format(dtf); // 최근 100일
+                    String past = java.time.LocalDate.now().minusDays(100).format(dtf);
                     
-                    url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+                    String url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
                             + "?FID_COND_MRKT_DIV_CODE=J"
                             + "&FID_INPUT_ISCD=" + code
                             + "&FID_INPUT_DATE_1=" + past
                             + "&FID_INPUT_DATE_2=" + today
                             + "&FID_PERIOD_DIV_CODE=D"
                             + "&FID_ORG_ADJ_PRC=0";
-                    trId = "FHKST03010100"; // 일봉 전용 TR 코드
+
+                    HttpRequest dataReq = HttpRequest.newBuilder()
+                            .uri(URI.create(url))
+                            .header("Content-Type", "application/json; charset=utf-8")
+                            .header("authorization", "Bearer " + accessToken)
+                            .header("appkey", APP_KEY)
+                            .header("appsecret", APP_SECRET)
+                            .header("tr_id", "FHKST03010100")
+                            .GET()
+                            .build();
+
+                    HttpResponse<String> dataRes = HttpClient.newHttpClient().send(dataReq, HttpResponse.BodyHandlers.ofString());
+                    responseBodyJson = dataRes.body();
+
                 } else {
-                    // 기존 당일 1분봉 로직
-                    url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
-                            + "?FID_ETC_CLS_CODE="
-                            + "&FID_COND_MRKT_DIV_CODE=J"
-                            + "&FID_INPUT_ISCD=" + code
-                            + "&FID_INPUT_HOUR_1=153000"
-                            + "&FID_PW_DATA_INCU_YN=Y";
-                    trId = "FHKST03010200"; // 분봉 전용 TR 코드
+                    // 🚀 1분봉 500개 긁어오기 (30개씩 연속 조회 루프)
+                    java.util.List<String> combinedOutput2 = new java.util.ArrayList<>();
+                    String targetHour = "153000"; // 시작 기준 시간 (장마감 혹은 현재 시간)
+                    
+                    // 500개를 채우려면 30개씩 약 17번 호출 필요
+                    for (int i = 0; i < 17; i++) {
+                        String url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+                                + "?FID_ETC_CLS_CODE="
+                                + "&FID_COND_MRKT_DIV_CODE=J"
+                                + "&FID_INPUT_ISCD=" + code
+                                + "&FID_INPUT_HOUR_1=" + targetHour
+                                + "&FID_PW_DATA_INCU_YN=Y";
+
+                        HttpRequest dataReq = HttpRequest.newBuilder()
+                                .uri(URI.create(url))
+                                .header("Content-Type", "application/json; charset=utf-8")
+                                .header("authorization", "Bearer " + accessToken)
+                                .header("appkey", APP_KEY)
+                                .header("appsecret", APP_SECRET)
+                                .header("tr_id", "FHKST03010200")
+                                .GET()
+                                .build();
+
+                        HttpResponse<String> dataRes = HttpClient.newHttpClient().send(dataReq, HttpResponse.BodyHandlers.ofString());
+                        String resBody = dataRes.body();
+
+                        // output2 배열 추출 및 병합
+                        int out2Idx = resBody.indexOf("\"output2\":[");
+                        if (out2Idx == -1) break;
+                        
+                        int bracketEnd = resBody.indexOf("]", out2Idx);
+                        if (bracketEnd == -1) break;
+
+                        String itemsStr = resBody.substring(out2Idx + 11, bracketEnd);
+                        if (itemsStr.trim().isEmpty()) break;
+
+                        // 개별 캔들 아이템들 분리
+                        String[] items = itemsStr.split("\\},\\{");
+                        if (items.length == 0) break;
+
+                        String oldestTime = "";
+                        for (int j = 0; j < items.length; j++) {
+                            String item = items[j];
+                            if (!item.startsWith("{")) item = "{" + item;
+                            if (!item.endsWith("}")) item = item + "}";
+                            
+                            combinedOutput2.add(item);
+
+                            // 가장 오래된 시간(마지막 아이템의 stck_cntg_hour) 추출
+                            if (j == items.length - 1) {
+                                int timeIdx = item.indexOf("\"stck_cntg_hour\":\"");
+                                if (timeIdx != -1) {
+                                    int tStart = timeIdx + 18;
+                                    int tEnd = item.indexOf("\"", tStart);
+                                    oldestTime = item.substring(tStart, tEnd);
+                                }
+                            }
+                        }
+
+                        // 더 이상 과거 데이터가 없거나 중단되면 탈출
+                        if (oldestTime.isEmpty() || oldestTime.compareTo(targetHour) >= 0) break;
+                        targetHour = oldestTime;
+
+                        // 한투 API 제한 회피용 살짝 대기 (0.05초)
+                        Thread.sleep(50);
+                    }
+
+                    // 500개 모은 데이터를 하나의 JSON 구조로 조립
+                    responseBodyJson = "{\"output1\":{},\"output2\":[" + String.join(",", combinedOutput2) + "],\"rt_cd\":\"000000\",\"msg1\":\"정상처리 되었습니다.\"}";
                 }
 
-                HttpRequest dataReq = HttpRequest.newBuilder()
-                        .uri(URI.create(url))
-                        .header("Content-Type", "application/json; charset=utf-8")
-                        .header("authorization", "Bearer " + accessToken)
-                        .header("appkey", APP_KEY)
-                        .header("appsecret", APP_SECRET)
-                        .header("tr_id", trId)
-                        .GET()
-                        .build();
-
-                HttpResponse<String> dataRes = HttpClient.newHttpClient().send(dataReq, HttpResponse.BodyHandlers.ofString());
-
-                byte[] responseBytes = dataRes.body().getBytes("UTF-8");
+                byte[] responseBytes = responseBodyJson.getBytes("UTF-8");
                 exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
                 exchange.sendResponseHeaders(200, responseBytes.length);
                 OutputStream os = exchange.getResponseBody();
                 os.write(responseBytes);
                 os.close();
 
-                System.out.println("📊 차트 데이터 전송 완료! (종목: " + code + ", 기준: " + (tf.equals("D")?"일봉":"1분봉") + ")");
+                System.out.println("📊 대용량 차트 데이터 전송 완료! (종목: " + code + ", 방식: " + tf + ")");
 
             } catch (Exception e) {
                 e.printStackTrace();
