@@ -45,7 +45,7 @@ public class KisProxyServer {
         System.out.println("🚀 자바 실전 중계 서버가 " + PORT + " 포트에서 실행 중! (AI 기능 탑재 완료)");
     }
 
-    static class DataHandler implements HttpHandler {
+static class DataHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", CORS_ORIGIN);
@@ -78,16 +78,42 @@ public class KisProxyServer {
 
                 String query = exchange.getRequestURI().getQuery();
                 String code = "114800";
-                if (query != null && query.contains("code=")) {
-                    code = query.split("code=")[1].split("&")[0];
+                String tf = "1m"; // 기본값은 1분봉
+                
+                if (query != null) {
+                    for (String param : query.split("&")) {
+                        if (param.startsWith("code=")) code = param.split("=")[1];
+                        if (param.startsWith("tf=")) tf = param.split("=")[1];
+                    }
                 }
 
-                String url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
-                        + "?FID_ETC_CLS_CODE="
-                        + "&FID_COND_MRKT_DIV_CODE=J"
-                        + "&FID_INPUT_ISCD=" + code
-                        + "&FID_INPUT_HOUR_1=153000"
-                        + "&FID_PW_DATA_INCU_YN=Y";
+                String url;
+                String trId;
+
+                // tf=D (일봉) 요청 시 API 주소 및 파라미터 완전 변경
+                if ("D".equalsIgnoreCase(tf)) {
+                    java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd");
+                    String today = java.time.LocalDate.now().format(dtf);
+                    String past = java.time.LocalDate.now().minusDays(100).format(dtf); // 최근 100일
+                    
+                    url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+                            + "?FID_COND_MRKT_DIV_CODE=J"
+                            + "&FID_INPUT_ISCD=" + code
+                            + "&FID_INPUT_DATE_1=" + past
+                            + "&FID_INPUT_DATE_2=" + today
+                            + "&FID_PERIOD_DIV_CODE=D"
+                            + "&FID_ORG_ADJ_PRC=0";
+                    trId = "FHKST03010100"; // 일봉 전용 TR 코드
+                } else {
+                    // 기존 당일 1분봉 로직
+                    url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+                            + "?FID_ETC_CLS_CODE="
+                            + "&FID_COND_MRKT_DIV_CODE=J"
+                            + "&FID_INPUT_ISCD=" + code
+                            + "&FID_INPUT_HOUR_1=153000"
+                            + "&FID_PW_DATA_INCU_YN=Y";
+                    trId = "FHKST03010200"; // 분봉 전용 TR 코드
+                }
 
                 HttpRequest dataReq = HttpRequest.newBuilder()
                         .uri(URI.create(url))
@@ -95,7 +121,7 @@ public class KisProxyServer {
                         .header("authorization", "Bearer " + accessToken)
                         .header("appkey", APP_KEY)
                         .header("appsecret", APP_SECRET)
-                        .header("tr_id", "FHKST03010200")
+                        .header("tr_id", trId)
                         .GET()
                         .build();
 
@@ -108,7 +134,7 @@ public class KisProxyServer {
                 os.write(responseBytes);
                 os.close();
 
-                System.out.println("📊 차트 데이터 브라우저로 전송 완료! (종목코드: " + code + ")");
+                System.out.println("📊 차트 데이터 전송 완료! (종목: " + code + ", 기준: " + (tf.equals("D")?"일봉":"1분봉") + ")");
 
             } catch (Exception e) {
                 e.printStackTrace();
