@@ -295,7 +295,7 @@ public class KisProxyServer {
                         + "\"messages\":[{"
                         + "\"role\":\"user\","
                         + "\"content\":["
-                        + "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/jpeg\",\"data\":\"" + base64Image + "\"}},"
+                        + "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"" + base64Image + "\"}},"
                         + "{\"type\":\"text\",\"text\":\"" + AZIZ_PROMPT + "\"}"
                         + "]"
                         + "}]"
