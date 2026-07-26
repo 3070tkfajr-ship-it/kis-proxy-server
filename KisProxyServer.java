@@ -148,7 +148,7 @@ public class KisProxyServer {
                     throw new Exception("Gemini API Key가 서버에 설정되지 않았습니다.");
                 }
 
-                String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY;
+                String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=" + GEMINI_KEY;
                String prompt = "너는 앤드루 아지즈 매매법(데이트레이딩) 전문가야. 첨부된 주식 1분봉 차트 이미지의 텍스트와 지표를 정확히 읽어내 분석해 줘.\n" +
                 "1. 종목명, 현재가, 주가 흐름 (VWAP과 주가의 위치 관계)\n" +
                 "2. 이동평균선(5, 20, 200)의 배열 상태 및 크로스 여부\n" +
