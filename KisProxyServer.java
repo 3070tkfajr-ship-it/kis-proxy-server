@@ -315,19 +315,19 @@ private static final String AZIZ_PROMPT =
                         .replace("\r", "\\r")
                         .replace("\t", "\\t");
 
-                String reqJson = "{"
-                        + "\"model\":\"claude-sonnet-5\","
-                        + "\"max_tokens\":16000"
-                        + "\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":7000},"
-                        + "\"messages\":[{"
-                        + "\"role\":\"user\","
-                        + "\"content\":["
-                        + "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\""
-                        + base64Image + "\"}},"
-                        + "{\"type\":\"text\",\"text\":\"" + escapedPrompt + "\"}"
-                        + "]"
-                        + "}]"
-                        + "}";
+String reqJson = "{"
+        + "\"model\":\"claude-sonnet-5\","
+        + "\"max_tokens\":16000,"
+        + "\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":6048},"
+        + "\"messages\":[{"
+        + "\"role\":\"user\","
+        + "\"content\":["
+        + "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\""
+        + base64Image + "\"}},"
+        + "{\"type\":\"text\",\"text\":\"" + escapedPrompt + "\"}"
+        + "]"
+        + "}]"
+        + "}";
                 
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create("https://api.anthropic.com/v1/messages"))
