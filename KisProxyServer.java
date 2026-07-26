@@ -317,7 +317,7 @@ private static final String AZIZ_PROMPT =
 
                 String reqJson = "{"
                         + "\"model\":\"claude-sonnet-5\","
-                        + "\"max_tokens\":8192,"
+                        + "\"max_tokens\":16000"
                         + "\"messages\":[{"
                         + "\"role\":\"user\","
                         + "\"content\":["
