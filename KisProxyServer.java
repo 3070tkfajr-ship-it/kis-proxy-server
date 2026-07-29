@@ -488,7 +488,7 @@ public class KisProxyServer {
                 if (GEMINI_KEY == null || GEMINI_KEY.isEmpty()) {
                     throw new Exception("Gemini API Key가 서버에 설정되지 않았습니다.");
                 }
-                String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=" + GEMINI_KEY;
+                String geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=" + GEMINI_KEY;
                 String reqJson = "{\"contents\":[{\"parts\":[{\"text\":\"" + AZIZ_PROMPT
                         + "\"},{\"inline_data\":{\"mime_type\":\"image/png\",\"data\":\""
                         + base64Image + "\"}}]}]}";
