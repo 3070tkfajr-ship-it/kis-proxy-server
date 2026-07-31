@@ -629,6 +629,10 @@ public class KisProxyServer {
                         + "?symbol=" + symbol
                         + "&interval=1min"
                         + "&outputsize=500"
+                        // 🚀 timezone=UTC 명시: 안 넣으면 Twelve Data가 기본값인 "거래소 현지시간"(미국 동부, America/New_York)으로
+                        // datetime을 내려주는데, 프론트(index.html의 usUtcDatetimeToEpoch)는 이 값을 UTC라고 가정하고 KST로 환산함.
+                        // 서버가 UTC로 안 맞춰주면 미국 동부시간이 그대로/엉뚱하게 KST인 척 표시되는 버그가 생김.
+                        + "&timezone=UTC"
                         + "&apikey=" + TWELVE_DATA_KEY;
 
                 HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
