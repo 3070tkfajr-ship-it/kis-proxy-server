@@ -830,11 +830,16 @@ public class KisProxyServer {
                 long endSec = System.currentTimeMillis() / 1000;
                 long startSec = endSec - 4L * 24 * 3600; // 최근 4일치 (주말/휴장 대비 여유분)
 
-                // /api/v1/contract/detail 실측 결과로 확인된 패턴: 개별 종목 주식은 "{티커}STOCK_USDT"
-                // (예: AMZNSTOCK_USDT, GOOGLSTOCK_USDT), 일부 ETF는 "{티커}_USDT" 그대로(예: SOXL_USDT).
-                String[] candidates = { symbol + "STOCK_USDT", symbol + "_USDT", symbol + "USDT" };
-                String body = null; String usedSymbol = null; int lastStatus = 0; String lastBody = "";
+                // ⚠️ 실측 결과, MEXC 종목 심볼은 규칙이 전혀 없다 (TSLA→TESLA_USDT, NVDA→NVIDIA_USDT,
+                // COIN→COINBASE_USDT, HOOD→ROBINHOOD_USDT, AAPL/AMZN/GOOGL/META/MCD/QQQ→{티커}STOCK_USDT,
+                // SOXL/SPY→{티커}_USDT 그대로). 그래서 추측 대신 /api/v1/contract/detail 전체 목록에서
+                // displayNameEn이 "{티커}_USDT..."로 시작하는 항목을 찾아 진짜 symbol 필드를 그대로 쓴다.
+                String discovered = lookupSymbolFromContractDetail(symbol);
+                String[] candidates = discovered != null
+                        ? new String[]{ discovered }
+                        : new String[]{ symbol + "STOCK_USDT", symbol + "_USDT", symbol + "USDT" }; // 목록 조회 자체가 실패했을 때만 쓰는 최후의 추측
 
+                String body = null; String usedSymbol = null; int lastStatus = 0; String lastBody = "";
                 for (String contractSymbol : candidates) {
                     String url = "https://api.mexc.com/api/v1/contract/kline/" + contractSymbol
                             + "?interval=Min1&start=" + startSec + "&end=" + endSec;
@@ -846,20 +851,6 @@ public class KisProxyServer {
                     if (apiOk) { body = lastBody; usedSymbol = contractSymbol; break; }
                 }
 
-                // 정적 후보가 전부 실패하면, /api/v1/contract/detail 전체 목록에서 실제 심볼을 검색해서 한 번 더 시도
-                // (예: displayNameEn이 "TSLA_USDT"인 항목을 찾아 그 항목의 진짜 symbol 필드를 가져옴)
-                if (body == null) {
-                    String discovered = lookupSymbolFromContractDetail(symbol);
-                    if (discovered != null) {
-                        String url = "https://api.mexc.com/api/v1/contract/kline/" + discovered
-                                + "?interval=Min1&start=" + startSec + "&end=" + endSec;
-                        HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
-                        HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
-                        lastStatus = res.statusCode(); lastBody = res.body();
-                        boolean apiOk = res.statusCode() == 200 && lastBody.contains("\"success\":true") && lastBody.contains("\"time\":[") && !lastBody.contains("\"time\":[]");
-                        if (apiOk) { body = lastBody; usedSymbol = discovered; }
-                    }
-                }
 
                 if (body == null) {
                     System.out.println("⚠️ MEXC 요청 실패 (모든 심볼 후보 실패, 마지막 상태 " + lastStatus + "): " + lastBody);
@@ -907,17 +898,20 @@ public class KisProxyServer {
         }
 
         // "key":[v1,v2,v3,...] 형태의 숫자 배열을 파싱
-        // /api/v1/contract/detail 전체 목록에서 displayNameEn이 "{티커}_USDT"인 항목을 찾아 그 실제 symbol 필드를 반환.
-        // 못 찾으면 null. (정적 후보가 다 실패했을 때만 호출되는 마지막 안전장치)
+        // /api/v1/contract/detail 전체 목록에서 displayNameEn이 "{티커}_USDT"로 시작하는 항목을 찾아 그 실제 symbol 필드를 반환.
+        // ⚠️ displayNameEn은 실제로 "TSLA_USDT PERPETUAL"처럼 뒤에 접미사가 붙어있어서 정확 일치가 아니라 접두어 매칭을 써야 함.
         private static String lookupSymbolFromContractDetail(String ticker) {
             try {
                 HttpRequest req = HttpRequest.newBuilder().uri(URI.create("https://api.mexc.com/api/v1/contract/detail")).GET().build();
                 HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
                 if (res.statusCode() != 200) return null;
                 String body = res.body();
-                String needle = "\"displayNameEn\":\"" + ticker + "_USDT\"";
+                String needle = "\"displayNameEn\":\"" + ticker + "_USDT"; // 끝에 "\"" 요구하지 않음(뒤에 " PERPETUAL" 등이 붙어있음)
                 int idx = body.indexOf(needle);
                 if (idx == -1) return null;
+                // 안전장치: needle 바로 다음 글자가 영문/숫자면(예: "TSLA_USDT2" 같은 다른 심볼과의 우연한 접두어 일치) 오탐이므로 제외
+                int afterIdx = idx + needle.length();
+                if (afterIdx < body.length() && Character.isLetterOrDigit(body.charAt(afterIdx))) return null;
                 int symIdx = body.lastIndexOf("\"symbol\":\"", idx);
                 if (symIdx == -1) return null;
                 int start = symIdx + "\"symbol\":\"".length();
