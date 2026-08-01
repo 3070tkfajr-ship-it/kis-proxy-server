@@ -826,21 +826,29 @@ public class KisProxyServer {
                     symbol = query.split("symbol=")[1].split("&")[0];
                 }
                 symbol = URLEncoder.encode(symbol.trim().toUpperCase(), StandardCharsets.UTF_8);
-                String contractSymbol = symbol + "_USDT"; // MEXC 선물 심볼 표기 규칙(언더스코어)
 
                 long endSec = System.currentTimeMillis() / 1000;
                 long startSec = endSec - 4L * 24 * 3600; // 최근 4일치 (주말/휴장 대비 여유분)
 
-                String url = "https://api.mexc.com/api/v1/contract/kline/" + contractSymbol
-                        + "?interval=Min1&start=" + startSec + "&end=" + endSec;
+                // MEXC "U.S. Stock Contracts"는 언더스코어 없는 표기(예: GOOGLUSDT)로 확인됐으나, 혹시 몰라
+                // 일반 선물 표기(언더스코어, 예: TSLA_USDT)도 순서대로 시도해서 실패 확률을 낮춘다.
+                String[] candidates = { symbol + "USDT", symbol + "_USDT" };
+                String body = null; String usedSymbol = null; int lastStatus = 0; String lastBody = "";
 
-                HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
-                HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
-                String body = res.body();
+                for (String contractSymbol : candidates) {
+                    String url = "https://api.mexc.com/api/v1/contract/kline/" + contractSymbol
+                            + "?interval=Min1&start=" + startSec + "&end=" + endSec;
+                    HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+                    HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+                    lastStatus = res.statusCode(); lastBody = res.body();
+                    boolean httpOk = res.statusCode() == 200;
+                    boolean apiOk = httpOk && lastBody.contains("\"success\":true") && lastBody.contains("\"time\":[") && !lastBody.contains("\"time\":[]");
+                    if (apiOk) { body = lastBody; usedSymbol = contractSymbol; break; }
+                }
 
-                if (res.statusCode() != 200) {
-                    System.out.println("⚠️ MEXC 요청 실패 (" + res.statusCode() + "): " + body);
-                    sendJson(exchange, res.statusCode(), "{\"error\": \"MEXC 요청 실패(종목이 MEXC 선물에 없을 수 있어요): " + body.replace("\"", "'") + "\"}");
+                if (body == null) {
+                    System.out.println("⚠️ MEXC 요청 실패 (모든 심볼 후보 실패, 마지막 상태 " + lastStatus + "): " + lastBody);
+                    sendJson(exchange, 502, "{\"error\": \"MEXC 요청 실패(종목이 MEXC 선물에 없거나 심볼 표기가 다를 수 있어요): " + lastBody.replace("\"", "'") + "\"}");
                     return;
                 }
 
@@ -875,7 +883,7 @@ public class KisProxyServer {
                 valuesJson.append("]}");
 
                 sendJson(exchange, 200, valuesJson.toString());
-                System.out.println("🪙 MEXC 선물 1분봉 전송 완료! (심볼: " + contractSymbol + ", " + n + "개)");
+                System.out.println("🪙 MEXC 선물 1분봉 전송 완료! (심볼: " + usedSymbol + ", " + n + "개)");
 
             } catch (Exception e) {
                 e.printStackTrace();
