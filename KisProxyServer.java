@@ -689,8 +689,9 @@ public class KisProxyServer {
                 }
                 symbol = URLEncoder.encode(symbol, StandardCharsets.UTF_8);
 
-                // 최근 4일치를 요청(주말/휴장 대비 여유분) — Alpaca는 프리/애프터마켓(IEX) 데이터도 별도 파라미터 없이
-                // 그냥 해당 시간대가 포함된 range를 요청하면 자연히 같이 내려옴.
+                // 최근 4일치 범위를 잡되(주말/휴장 대비 여유분), sort=desc로 "최신 600개"를 받는다.
+                // ⚠️ sort=asc였을 때는 limit=600이 "범위 시작점(4일 전)부터 600개"로 잘려서, 프리/애프터마켓까지 합치면
+                // 하루에만 600개 넘는 분봉이 나오는 바람에 "오늘"에 도달하지도 못하고 옛날 데이터에서 끊기는 버그가 있었음.
                 java.time.Instant end = java.time.Instant.now();
                 java.time.Instant start = end.minus(java.time.Duration.ofDays(4));
                 String url = "https://data.alpaca.markets/v2/stocks/" + symbol + "/bars"
@@ -699,7 +700,7 @@ public class KisProxyServer {
                         + "&end=" + java.time.format.DateTimeFormatter.ISO_INSTANT.format(end)
                         + "&limit=600"
                         + "&feed=iex"   // 무료 플랜은 IEX 피드까지만 지원 (SIP/BOATS는 유료)
-                        + "&sort=asc";
+                        + "&sort=desc";
 
                 HttpRequest req = HttpRequest.newBuilder()
                         .uri(URI.create(url))
@@ -723,8 +724,8 @@ public class KisProxyServer {
                     if (!itemsStr.trim().isEmpty()) {
                         String[] items = itemsStr.split("\\},\\{");
                         boolean firstWritten = false;
-                        // Alpaca는 sort=asc(과거→최신)로 내려오므로, Twelve Data 관례(최신이 먼저)에 맞춰 역순으로 조립
-                        for (int i = items.length - 1; i >= 0; i--) {
+                        // sort=desc로 이미 최신순(Twelve Data 관례와 동일)으로 오므로 순서 그대로 조립하면 됨
+                        for (int i = 0; i < items.length; i++) {
                             String item = items[i];
                             String t = extractJsonValue(item, "t");
                             String o = extractJsonValue(item, "o");
