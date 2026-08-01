@@ -11,6 +11,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.ArrayList;
 
 public class KisProxyServer {
     private static final String APP_KEY = System.getenv("KIS_APP_KEY");
@@ -286,6 +288,7 @@ public class KisProxyServer {
         server.createContext("/analyze", new AnalyzeHandler());
         server.createContext("/analyze-claude", new ClaudeAnalyzeHandler());
         server.createContext("/us-data", new AlpacaUsDataHandler());       // 🦙 기본: Alpaca (무료 애프터마켓 포함)
+        server.createContext("/us-data-mexc", new MexcUsDataHandler());    // 🪙 보조: MEXC 선물(주말·24시간 대응, 인증 불필요)
         server.createContext("/us-data-td", new UsDataHandler());          // 🕰️ 백업용: 기존 Twelve Data (필요시 수동 호출)
         server.setExecutor(null);
         server.start();
@@ -792,6 +795,109 @@ public class KisProxyServer {
                 if (end == valStart) return null;
                 return json.substring(valStart, end);
             }
+        }
+
+        private static void sendJson(HttpExchange exchange, int status, String jsonBody) throws IOException {
+            byte[] b = jsonBody.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
+            exchange.sendResponseHeaders(status, b.length);
+            OutputStream os = exchange.getResponseBody();
+            os.write(b);
+            os.close();
+        }
+    }
+
+    // 🪙 MEXC 선물(Perpetual Futures) "US Stock Contracts" 연동 — 인증(API 키) 불필요, 24시간·주말에도 데이터 있음.
+    // 실제 거래소 시세가 아니라 MEXC 선물 계약 가격(Ondo 토큰화 주식에 연동)이라 참고용이며, Alpaca를 대체하지 않고 보조 소스로 사용.
+    static class MexcUsDataHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", CORS_ORIGIN);
+            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, OPTIONS");
+                exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+            try {
+                String query = exchange.getRequestURI().getQuery();
+                String symbol = "TSLA";
+                if (query != null && query.contains("symbol=")) {
+                    symbol = query.split("symbol=")[1].split("&")[0];
+                }
+                symbol = URLEncoder.encode(symbol.trim().toUpperCase(), StandardCharsets.UTF_8);
+                String contractSymbol = symbol + "_USDT"; // MEXC 선물 심볼 표기 규칙(언더스코어)
+
+                long endSec = System.currentTimeMillis() / 1000;
+                long startSec = endSec - 4L * 24 * 3600; // 최근 4일치 (주말/휴장 대비 여유분)
+
+                String url = "https://api.mexc.com/api/v1/contract/kline/" + contractSymbol
+                        + "?interval=Min1&start=" + startSec + "&end=" + endSec;
+
+                HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+                HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+                String body = res.body();
+
+                if (res.statusCode() != 200) {
+                    System.out.println("⚠️ MEXC 요청 실패 (" + res.statusCode() + "): " + body);
+                    sendJson(exchange, res.statusCode(), "{\"error\": \"MEXC 요청 실패(종목이 MEXC 선물에 없을 수 있어요): " + body.replace("\"", "'") + "\"}");
+                    return;
+                }
+
+                // MEXC 응답은 객체-배열이 아니라 "병렬 배열" 형태: {"data":{"time":[...],"open":[...],"close":[...],"high":[...],"low":[...],"vol":[...]}}
+                List<Double> times = extractDoubleArray(body, "time");
+                List<Double> opens = extractDoubleArray(body, "open");
+                List<Double> closes = extractDoubleArray(body, "close");
+                List<Double> highs = extractDoubleArray(body, "high");
+                List<Double> lows = extractDoubleArray(body, "low");
+                List<Double> vols = extractDoubleArray(body, "vol");
+
+                int n = times.size();
+                StringBuilder valuesJson = new StringBuilder("{\"values\":[");
+                boolean firstWritten = false;
+                // MEXC는 과거→최신 순으로 오므로, Twelve Data/Alpaca 관례(최신이 먼저)에 맞춰 역순으로 조립
+                for (int i = n - 1; i >= 0; i--) {
+                    if (i >= opens.size() || i >= closes.size() || i >= highs.size() || i >= lows.size()) continue;
+                    long epochSec = times.get(i).longValue();
+                    java.time.Instant inst = java.time.Instant.ofEpochSecond(epochSec);
+                    String datetime = inst.toString().replace("T", " ").replace("Z", "");
+                    if (datetime.length() > 19) datetime = datetime.substring(0, 19);
+                    double v = (i < vols.size()) ? vols.get(i) : 0;
+                    if (firstWritten) valuesJson.append(",");
+                    valuesJson.append("{\"datetime\":\"").append(datetime).append("\",")
+                            .append("\"open\":\"").append(opens.get(i)).append("\",")
+                            .append("\"high\":\"").append(highs.get(i)).append("\",")
+                            .append("\"low\":\"").append(lows.get(i)).append("\",")
+                            .append("\"close\":\"").append(closes.get(i)).append("\",")
+                            .append("\"volume\":\"").append(v).append("\"}");
+                    firstWritten = true;
+                }
+                valuesJson.append("]}");
+
+                sendJson(exchange, 200, valuesJson.toString());
+                System.out.println("🪙 MEXC 선물 1분봉 전송 완료! (심볼: " + contractSymbol + ", " + n + "개)");
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                sendJson(exchange, 500, "{\"error\": \"MEXC 데이터 연동 실패: " + String.valueOf(e.getMessage()).replace("\"", "'") + "\"}");
+            }
+        }
+
+        // "key":[v1,v2,v3,...] 형태의 숫자 배열을 파싱
+        private static List<Double> extractDoubleArray(String json, String key) {
+            List<Double> out = new ArrayList<>();
+            String marker = "\"" + key + "\":[";
+            int idx = json.indexOf(marker);
+            if (idx == -1) return out;
+            int start = idx + marker.length();
+            int end = json.indexOf("]", start);
+            if (end == -1) return out;
+            String arrStr = json.substring(start, end).trim();
+            if (arrStr.isEmpty()) return out;
+            for (String piece : arrStr.split(",")) {
+                try { out.add(Double.parseDouble(piece.trim())); } catch (Exception ignore) {}
+            }
+            return out;
         }
 
         private static void sendJson(HttpExchange exchange, int status, String jsonBody) throws IOException {
