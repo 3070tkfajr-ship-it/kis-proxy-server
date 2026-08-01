@@ -830,9 +830,9 @@ public class KisProxyServer {
                 long endSec = System.currentTimeMillis() / 1000;
                 long startSec = endSec - 4L * 24 * 3600; // 최근 4일치 (주말/휴장 대비 여유분)
 
-                // MEXC "U.S. Stock Contracts"는 언더스코어 없는 표기(예: GOOGLUSDT)로 확인됐으나, 혹시 몰라
-                // 일반 선물 표기(언더스코어, 예: TSLA_USDT)도 순서대로 시도해서 실패 확률을 낮춘다.
-                String[] candidates = { symbol + "USDT", symbol + "_USDT" };
+                // /api/v1/contract/detail 실측 결과로 확인된 패턴: 개별 종목 주식은 "{티커}STOCK_USDT"
+                // (예: AMZNSTOCK_USDT, GOOGLSTOCK_USDT), 일부 ETF는 "{티커}_USDT" 그대로(예: SOXL_USDT).
+                String[] candidates = { symbol + "STOCK_USDT", symbol + "_USDT", symbol + "USDT" };
                 String body = null; String usedSymbol = null; int lastStatus = 0; String lastBody = "";
 
                 for (String contractSymbol : candidates) {
@@ -844,6 +844,21 @@ public class KisProxyServer {
                     boolean httpOk = res.statusCode() == 200;
                     boolean apiOk = httpOk && lastBody.contains("\"success\":true") && lastBody.contains("\"time\":[") && !lastBody.contains("\"time\":[]");
                     if (apiOk) { body = lastBody; usedSymbol = contractSymbol; break; }
+                }
+
+                // 정적 후보가 전부 실패하면, /api/v1/contract/detail 전체 목록에서 실제 심볼을 검색해서 한 번 더 시도
+                // (예: displayNameEn이 "TSLA_USDT"인 항목을 찾아 그 항목의 진짜 symbol 필드를 가져옴)
+                if (body == null) {
+                    String discovered = lookupSymbolFromContractDetail(symbol);
+                    if (discovered != null) {
+                        String url = "https://api.mexc.com/api/v1/contract/kline/" + discovered
+                                + "?interval=Min1&start=" + startSec + "&end=" + endSec;
+                        HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+                        HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+                        lastStatus = res.statusCode(); lastBody = res.body();
+                        boolean apiOk = res.statusCode() == 200 && lastBody.contains("\"success\":true") && lastBody.contains("\"time\":[") && !lastBody.contains("\"time\":[]");
+                        if (apiOk) { body = lastBody; usedSymbol = discovered; }
+                    }
                 }
 
                 if (body == null) {
@@ -892,6 +907,28 @@ public class KisProxyServer {
         }
 
         // "key":[v1,v2,v3,...] 형태의 숫자 배열을 파싱
+        // /api/v1/contract/detail 전체 목록에서 displayNameEn이 "{티커}_USDT"인 항목을 찾아 그 실제 symbol 필드를 반환.
+        // 못 찾으면 null. (정적 후보가 다 실패했을 때만 호출되는 마지막 안전장치)
+        private static String lookupSymbolFromContractDetail(String ticker) {
+            try {
+                HttpRequest req = HttpRequest.newBuilder().uri(URI.create("https://api.mexc.com/api/v1/contract/detail")).GET().build();
+                HttpResponse<String> res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString());
+                if (res.statusCode() != 200) return null;
+                String body = res.body();
+                String needle = "\"displayNameEn\":\"" + ticker + "_USDT\"";
+                int idx = body.indexOf(needle);
+                if (idx == -1) return null;
+                int symIdx = body.lastIndexOf("\"symbol\":\"", idx);
+                if (symIdx == -1) return null;
+                int start = symIdx + "\"symbol\":\"".length();
+                int end = body.indexOf("\"", start);
+                if (end == -1) return null;
+                return body.substring(start, end);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
         private static List<Double> extractDoubleArray(String json, String key) {
             List<Double> out = new ArrayList<>();
             String marker = "\"" + key + "\":[";
