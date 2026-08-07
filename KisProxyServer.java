@@ -15,15 +15,14 @@ import java.util.List;
 import java.util.ArrayList;
 
 public class KisProxyServer {
-private static final String APP_KEY = System.getenv(“KIS_APP_KEY”);
-private static final String APP_SECRET = System.getenv(“KIS_APP_SECRET”);
-private static final String GEMINI_KEY = System.getenv(“GEMINI_API_KEY”);
-private static final String CLAUDE_KEY = System.getenv(“CLAUDE_API_KEY”);
-private static final String TWELVE_DATA_KEY = System.getenv(“TWELVE_DATA_KEY”);
-private static final String ALPACA_KEY_ID = System.getenv(“ALPACA_KEY_ID”);
-private static final String ALPACA_SECRET_KEY = System.getenv(“ALPACA_SECRET_KEY”);
+private static final String APP_KEY = System.getenv("KIS_APP_KEY");
+private static final String APP_SECRET = System.getenv("KIS_APP_SECRET");
+private static final String GEMINI_KEY = System.getenv("GEMINI_API_KEY");
+private static final String CLAUDE_KEY = System.getenv("CLAUDE_API_KEY");
+private static final String TWELVE_DATA_KEY = System.getenv("TWELVE_DATA_KEY");
+private static final String ALPACA_KEY_ID = System.getenv("ALPACA_KEY_ID");
+private static final String ALPACA_SECRET_KEY = System.getenv("ALPACA_SECRET_KEY");
 
-```
 private static final String CORS_ORIGIN = System.getenv().getOrDefault("CORS_ORIGIN", "*");
 private static final int PORT = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
 private static final String DOMAIN = "https://openapi.koreainvestment.com:9443";
@@ -1014,7 +1013,6 @@ static class MexcUsDataHandler implements HttpHandler {
         os.write(b);
         os.close();
     }
-}
-```
+
 
 }
