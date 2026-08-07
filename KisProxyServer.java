@@ -15,14 +15,15 @@ import java.util.List;
 import java.util.ArrayList;
 
 public class KisProxyServer {
-private static final String APP_KEY = System.getenv("KIS_APP_KEY");
-private static final String APP_SECRET = System.getenv("KIS_APP_SECRET");
-private static final String GEMINI_KEY = System.getenv("GEMINI_API_KEY");
-private static final String CLAUDE_KEY = System.getenv("CLAUDE_API_KEY");
-private static final String TWELVE_DATA_KEY = System.getenv("TWELVE_DATA_KEY");
-private static final String ALPACA_KEY_ID = System.getenv("ALPACA_KEY_ID");
-private static final String ALPACA_SECRET_KEY = System.getenv("ALPACA_SECRET_KEY");
+private static final String APP_KEY = System.getenv(“KIS_APP_KEY”);
+private static final String APP_SECRET = System.getenv(“KIS_APP_SECRET”);
+private static final String GEMINI_KEY = System.getenv(“GEMINI_API_KEY”);
+private static final String CLAUDE_KEY = System.getenv(“CLAUDE_API_KEY”);
+private static final String TWELVE_DATA_KEY = System.getenv(“TWELVE_DATA_KEY”);
+private static final String ALPACA_KEY_ID = System.getenv(“ALPACA_KEY_ID”);
+private static final String ALPACA_SECRET_KEY = System.getenv(“ALPACA_SECRET_KEY”);
 
+```
 private static final String CORS_ORIGIN = System.getenv().getOrDefault("CORS_ORIGIN", "*");
 private static final int PORT = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
 private static final String DOMAIN = "https://openapi.koreainvestment.com:9443";
@@ -415,8 +416,10 @@ static class DataHandler implements HttpHandler {
                     targetHour = nowHms; // 장중(08:00 ~ 15:30)에는 현재 시간 그대로 사용
                 }
 
-                String prevTargetHour = null; 
-                
+                String prevTargetHour = null;
+                int stuckCount = 0; // 진전이 없을 때 바로 포기하지 않고 한 번 더 참아주기 위한 카운터
+                java.util.List<String> debugLog = new java.util.ArrayList<>();
+
                 for (int i = 0; i < 17; i++) {
                     String url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
                             + "?FID_ETC_CLS_CODE="
@@ -436,9 +439,10 @@ static class DataHandler implements HttpHandler {
                     HttpResponse<String> dataRes = HttpClient.newHttpClient()
                             .send(dataReq, HttpResponse.BodyHandlers.ofString());
                     String resBody = dataRes.body();
-                    
+
                     int out2Idx = resBody.indexOf("\"output2\":[");
                     if (out2Idx == -1) {
+                        debugLog.add("p" + i + ":output2필드없음");
                         System.out.println("⚠️ [분봉 페이지 " + i + "] output2 필드를 찾지 못함 - 응답 앞부분: "
                                 + resBody.substring(0, Math.min(200, resBody.length())));
                         break;
@@ -447,6 +451,7 @@ static class DataHandler implements HttpHandler {
                     if (bracketEnd == -1) break;
                     String itemsStr = resBody.substring(out2Idx + 11, bracketEnd);
                     if (itemsStr.trim().isEmpty()) {
+                        debugLog.add("p" + i + ":빈배열(targetHour=" + targetHour + ")");
                         System.out.println("⚠️ [분봉 페이지 " + i + "] output2 배열이 비어있음 (targetHour=" + targetHour + ")");
                         break;
                     }
@@ -480,15 +485,42 @@ static class DataHandler implements HttpHandler {
                         addedThisPage++;
                     }
 
+                    debugLog.add("p" + i + ":target=" + targetHour + ",응답" + items.length + "개,신규" + addedThisPage + "개,범위=" + newestTimeInPage + "~" + oldestTime);
                     System.out.println("📄 [분봉 페이지 " + i + "] targetHour=" + targetHour
                             + " → 응답 " + items.length + "개 (신규추가 " + addedThisPage + "개), "
                             + "페이지 내 시간범위=" + newestTimeInPage + "~" + oldestTime);
 
                     if (oldestTime.isEmpty()) {
+                        debugLog.add("중단:oldestTime파싱실패");
                         System.out.println("⚠️ oldestTime 파싱 실패 - stck_cntg_hour 필드를 못 찾음. 루프 중단.");
                         break;
                     }
-                    if (oldestTime.equals(prevTargetHour) || oldestTime.compareTo(targetHour) >= 0) {
+
+                    boolean stuck = oldestTime.equals(prevTargetHour) || oldestTime.compareTo(targetHour) >= 0;
+                    if (stuck && addedThisPage == 0) {
+                        // 진전이 없는 데다 새로 추가된 것도 0개면, 한 번은 시간을 강제로 1분 더 당겨서 재시도(경계 중복 케이스 대비)
+                        stuckCount++;
+                        if (stuckCount > 2) {
+                            debugLog.add("중단:2회연속진전없음(oldestTime=" + oldestTime + ",target=" + targetHour + ")");
+                            System.out.println("⚠️ 페이지네이션이 더 이상 전진하지 않음(재시도 포함 2회). 루프 중단.");
+                            break;
+                        }
+                        try {
+                            int hh = Integer.parseInt(targetHour.substring(0, 2));
+                            int mm = Integer.parseInt(targetHour.substring(2, 4));
+                            int totalMin = hh * 60 + mm - 1;
+                            if (totalMin < 0) { debugLog.add("중단:시간역전"); break; }
+                            prevTargetHour = targetHour;
+                            targetHour = String.format("%02d%02d00", totalMin / 60, totalMin % 60);
+                            Thread.sleep(50);
+                            continue;
+                        } catch (Exception ex) {
+                            break;
+                        }
+                    }
+                    stuckCount = 0;
+                    if (stuck) {
+                        debugLog.add("중단:정상진행끝(oldestTime=" + oldestTime + ",target=" + targetHour + ")");
                         System.out.println("⚠️ 페이지네이션이 더 이상 전진하지 않음 (oldestTime=" + oldestTime
                                 + ", targetHour=" + targetHour + "). 루프 중단.");
                         break;
@@ -498,9 +530,10 @@ static class DataHandler implements HttpHandler {
                     Thread.sleep(50);
                 }
                 System.out.println("✅ 분봉 수집 완료: 총 " + combinedOutput2.size() + "개 (중복 제거 후)");
+                String debugStr = String.join(" | ", debugLog).replace("\"", "'");
                 responseBodyJson = "{\"output1\":{},\"output2\":["
                         + String.join(",", combinedOutput2)
-                        + "],\"rt_cd\":\"000000\",\"msg1\":\"정상처리 되었습니다.\"}";
+                        + "],\"rt_cd\":\"000000\",\"msg1\":\"정상처리 되었습니다.\",\"_debugPages\":\"" + debugStr + "\"}";
             }
 
             byte[] responseBytes = responseBodyJson.getBytes(StandardCharsets.UTF_8);
@@ -982,5 +1015,6 @@ static class MexcUsDataHandler implements HttpHandler {
         os.close();
     }
 }
+```
 
 }
