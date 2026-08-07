@@ -419,6 +419,7 @@ static class DataHandler implements HttpHandler {
                 String prevTargetHour = null;
                 int stuckCount = 0; // 진전이 없을 때 바로 포기하지 않고 한 번 더 참아주기 위한 카운터
                 java.util.List<String> debugLog = new java.util.ArrayList<>();
+                String runningOldestKey = null; // 지금까지 수집한 것 중 가장 과거(작은) "날짜+시각"(YYYYMMDDHHMMSS) — 날짜가 바뀌는 정상 케이스와 이상 케이스를 구분하는 기준
 
                 for (int i = 0; i < 17; i++) {
                     String url = DOMAIN + "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
@@ -458,9 +459,13 @@ static class DataHandler implements HttpHandler {
                     String[] items = itemsStr.split("\\},\\{");
                     if (items.length == 0) break;
 
-                    int addedThisPage = 0;
+                    // 시각(HHMMSS)뿐 아니라 날짜(YYYYMMDD)까지 같이 읽어서 "날짜+시각" 결합키로 비교한다.
+                    // (시:분:초만 비교하면, 정상적으로 전날로 넘어간 것과 같은 날 안에서 이상하게 튄 것을 구분할 수 없음)
+                    java.util.List<String> pageItems = new java.util.ArrayList<>();
+                    java.util.List<String> pageKeys = new java.util.ArrayList<>();
                     String oldestTime = "";
-                    String newestTimeInPage = "";
+                    String oldestKey = "";
+                    String newestKeyInPage = "";
                     for (int j = 0; j < items.length; j++) {
                         String item = items[j];
                         if (!item.startsWith("{")) item = "{" + item;
@@ -473,22 +478,46 @@ static class DataHandler implements HttpHandler {
                             int tEnd = item.indexOf("\"", tStart);
                             itemTime = item.substring(tStart, tEnd);
                         }
-
-                        if (j == 0) newestTimeInPage = itemTime;
-                        if (j == items.length - 1) oldestTime = itemTime;
-
-                        if (!itemTime.isEmpty() && seenTimes.contains(itemTime)) {
-                            continue;
+                        String itemDate = "";
+                        int dateIdx = item.indexOf("\"stck_bsop_date\":\"");
+                        if (dateIdx != -1) {
+                            int dStart = dateIdx + 19;
+                            int dEnd = item.indexOf("\"", dStart);
+                            itemDate = item.substring(dStart, dEnd);
                         }
-                        if (!itemTime.isEmpty()) seenTimes.add(itemTime);
-                        combinedOutput2.add(item);
+                        String key = (itemDate.isEmpty() ? "00000000" : itemDate) + (itemTime.isEmpty() ? "000000" : itemTime);
+
+                        if (j == 0) newestKeyInPage = key;
+                        if (j == items.length - 1) { oldestKey = key; oldestTime = itemTime; }
+                        pageItems.add(item);
+                        pageKeys.add(key);
+                    }
+
+                    // 이상 감지: 이 페이지의 "가장 최근" 지점이, 지금까지 수집해온 것 중 가장 과거 지점보다 미래라면
+                    // (=거꾸로 가야 하는데 앞으로 튐) 오염된 데이터로 간주해서 통째로 버림.
+                    // 날짜가 정상적으로 전날로 넘어가는 것은 key 자체가 자연히 더 작아지므로 여기 안 걸림.
+                    boolean anomalous = (runningOldestKey != null && newestKeyInPage.compareTo(runningOldestKey) > 0)
+                            || oldestKey.compareTo(newestKeyInPage) > 0;
+                    if (anomalous) {
+                        debugLog.add("p" + i + ":이상감지(진행기준=" + runningOldestKey + ",이페이지범위=" + newestKeyInPage + "~" + oldestKey + ") → 폐기, 종료");
+                        System.out.println("⚠️ [분봉 페이지 " + i + "] 이상값 감지(진행기준=" + runningOldestKey
+                                + ", 이 페이지 범위=" + newestKeyInPage + "~" + oldestKey + "). 페이지 폐기, 루프 종료.");
+                        break;
+                    }
+
+                    int addedThisPage = 0;
+                    for (int j = 0; j < pageItems.size(); j++) {
+                        String key = pageKeys.get(j);
+                        if (seenTimes.contains(key)) continue;
+                        seenTimes.add(key);
+                        combinedOutput2.add(pageItems.get(j));
                         addedThisPage++;
                     }
 
-                    debugLog.add("p" + i + ":target=" + targetHour + ",응답" + items.length + "개,신규" + addedThisPage + "개,범위=" + newestTimeInPage + "~" + oldestTime);
+                    debugLog.add("p" + i + ":target=" + targetHour + ",응답" + items.length + "개,신규" + addedThisPage + "개,범위=" + newestKeyInPage + "~" + oldestKey);
                     System.out.println("📄 [분봉 페이지 " + i + "] targetHour=" + targetHour
                             + " → 응답 " + items.length + "개 (신규추가 " + addedThisPage + "개), "
-                            + "페이지 내 시간범위=" + newestTimeInPage + "~" + oldestTime);
+                            + "페이지 내 범위=" + newestKeyInPage + "~" + oldestKey);
 
                     if (oldestTime.isEmpty()) {
                         debugLog.add("중단:oldestTime파싱실패");
@@ -496,12 +525,12 @@ static class DataHandler implements HttpHandler {
                         break;
                     }
 
-                    boolean stuck = oldestTime.equals(prevTargetHour) || oldestTime.compareTo(targetHour) >= 0;
-                    if (stuck && addedThisPage == 0) {
+                    boolean noProgress = (runningOldestKey != null && oldestKey.compareTo(runningOldestKey) >= 0) || oldestTime.equals(prevTargetHour);
+                    if (noProgress && addedThisPage == 0) {
                         // 진전이 없는 데다 새로 추가된 것도 0개면, 한 번은 시간을 강제로 1분 더 당겨서 재시도(경계 중복 케이스 대비)
                         stuckCount++;
                         if (stuckCount > 2) {
-                            debugLog.add("중단:2회연속진전없음(oldestTime=" + oldestTime + ",target=" + targetHour + ")");
+                            debugLog.add("중단:2회연속진전없음(oldestKey=" + oldestKey + ")");
                             System.out.println("⚠️ 페이지네이션이 더 이상 전진하지 않음(재시도 포함 2회). 루프 중단.");
                             break;
                         }
@@ -509,7 +538,7 @@ static class DataHandler implements HttpHandler {
                             int hh = Integer.parseInt(targetHour.substring(0, 2));
                             int mm = Integer.parseInt(targetHour.substring(2, 4));
                             int totalMin = hh * 60 + mm - 1;
-                            if (totalMin < 0) { debugLog.add("중단:시간역전"); break; }
+                            if (totalMin < 0) totalMin = 23 * 60 + 59; // 자정 넘어가면 23:59부터 다시 (전날 마감 근처로 자연 유도)
                             prevTargetHour = targetHour;
                             targetHour = String.format("%02d%02d00", totalMin / 60, totalMin % 60);
                             Thread.sleep(50);
@@ -519,10 +548,10 @@ static class DataHandler implements HttpHandler {
                         }
                     }
                     stuckCount = 0;
-                    if (stuck) {
-                        debugLog.add("중단:정상진행끝(oldestTime=" + oldestTime + ",target=" + targetHour + ")");
-                        System.out.println("⚠️ 페이지네이션이 더 이상 전진하지 않음 (oldestTime=" + oldestTime
-                                + ", targetHour=" + targetHour + "). 루프 중단.");
+                    runningOldestKey = oldestKey;
+                    if (noProgress) {
+                        debugLog.add("중단:정상진행끝(oldestKey=" + oldestKey + ")");
+                        System.out.println("⚠️ 페이지네이션이 더 이상 전진하지 않음 (oldestKey=" + oldestKey + "). 루프 중단.");
                         break;
                     }
                     prevTargetHour = targetHour;
@@ -1015,5 +1044,6 @@ static class MexcUsDataHandler implements HttpHandler {
         os.close();
     }
 }
+```
 
 }
